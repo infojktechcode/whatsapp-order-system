@@ -1,0 +1,10 @@
+﻿export interface Env {
+  SUPABASE_URL: string
+  SUPABASE_SERVICE_ROLE_KEY: string
+  MPESA_CONSUMER_KEY: string
+  MPESA_CONSUMER_SECRET: string
+  MPESA_PASSKEY: string
+  MPESA_SHORTCODE: string
+  MPESA_CALLBACK_URL: string
+  MPESA_CALLBACK_SECRET: string
+}
