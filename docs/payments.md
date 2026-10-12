@@ -21,6 +21,12 @@ initiateStkPush      POST /mpesa-stk
                                     transition → payment_processing
   <── status + amount (display) ──  NEVER marks anything PAID
 
+getOrderStatus       POST /order-status
+  order_id + status_token ────────> verify HMAC(order_id, ORDER_STATUS_SECRET)
+                                    (400 missing / 403 wrong; before any lookup)
+                                    read orders + payments (service role)
+  <── status + payment state ─────  read-only: no writes, no transitions
+
                                     Safaricom POST /mpesa-callback?token=…
                                     1. shared secret (401 fail-closed, 503 if unset)
                                     2. structure check
@@ -45,6 +51,11 @@ initiateStkPush      POST /mpesa-stk
 - Every attempt (STK request, Daraja failure, callback) lands in `payment_transactions`.
 - `MPESA_CALLBACK_TOKEN` is mandatory in both functions: without it `mpesa-stk` refuses to
   build a callback URL (503) and `mpesa-callback` rejects every request (503/401).
+- Guest checkout has no auth session, so RLS blocks the browser from reading its own order.
+  Confirmation polling therefore goes through `order-status` with a `status_token`
+  (`HMAC-SHA256(ORDER_STATUS_SECRET, order_id)`) minted by `checkout`. Knowing an order id
+  alone is not enough; the token is verified (constant time) before any database lookup,
+  and the function only ever reads — status changes remain backend-controlled.
 
 ## Callback Validation Checklist
 
@@ -62,6 +73,7 @@ initiateStkPush      POST /mpesa-stk
 | Secret | Purpose | State |
 |---|---|---|
 | `MPESA_CALLBACK_TOKEN` | Shared secret inside the callback URL | ✅ set (rotate if leaked) |
+| `ORDER_STATUS_SECRET` | HMAC key for guest status-polling tokens | ✅ set |
 | `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja OAuth | ⬜ pending client creds |
 | `MPESA_SHORTCODE` / `MPESA_PASSKEY` | STK push signing | ⬜ pending client creds |
 | `MPESA_BASE_URL` | Defaults to Daraja sandbox | ⬜ set to production when live |
@@ -70,7 +82,11 @@ initiateStkPush      POST /mpesa-stk
 
 ## Live-verified behaviour
 
-- `checkout`: 201 (server totals), 400 (client-sent price fields), 400 (qty 0), 401 (no key).
+- `checkout`: 201 (server totals + `status_token`), 400 (client-sent price fields),
+  400 (qty 0), 401 (no key).
 - `mpesa-stk`: 400 (client `amount`), 404 (unknown order), 503 (Daraja secrets absent),
   409 (order not awaiting payment).
 - `mpesa-callback`: 401 (missing/wrong token), 200 `received:false` (unknown checkout id).
+- `order-status`: 200 (valid token, `awaiting_payment`), 400 (missing token/field),
+  403 (wrong token), 403 (token/order mismatch), 403 (unknown order before lookup),
+  401 (no key).

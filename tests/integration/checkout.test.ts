@@ -22,6 +22,7 @@ const SERVER_RESULT = {
   discount: 0,
   delivery_fee: 350,
   total: 17150,
+  status_token: 'a'.repeat(64),
   items: [
     {
       variant_id: 'v1',
@@ -59,6 +60,14 @@ describe('checkout via the Edge Function', () => {
     expect(result.delivery_fee).toBe(350)
     expect(result.total).toBe(17150)
     expect(result.pricing[0].pricing_tier).toBe('wholesale')
+    expect(result.status_token).toBe('a'.repeat(64))
+  })
+
+  it('rejects a response without a status token — guest polling would be impossible', async () => {
+    const { status_token: _omitted, ...withoutToken } = SERVER_RESULT
+    mockInvoke('checkout', () => ({ data: withoutToken, error: null }))
+
+    await expect(checkout(makeInput())).rejects.toThrow(/status token/)
   })
 
   it('posts only business input — never prices, fees, discounts or totals', async () => {

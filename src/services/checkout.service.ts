@@ -13,6 +13,7 @@ interface ServerCheckoutResult {
   discount: number
   delivery_fee: number
   total: number
+  status_token: string
   items: CheckoutResult['pricing']
 }
 
@@ -22,6 +23,9 @@ export async function checkout(input: CheckoutInput): Promise<CheckoutResult> {
   if (typeof data.order_id !== 'string' || typeof data.total !== 'number') {
     throw new Error('Order creation returned an unexpected response')
   }
+  if (typeof data.status_token !== 'string' || !data.status_token) {
+    throw new Error('Order creation returned no status token')
+  }
 
   return {
     order_id: data.order_id,
@@ -30,6 +34,7 @@ export async function checkout(input: CheckoutInput): Promise<CheckoutResult> {
     discount: data.discount,
     delivery_fee: data.delivery_fee,
     total: data.total,
+    status_token: data.status_token,
     pricing: data.items ?? [],
   }
 }

@@ -35,14 +35,16 @@ export function ProductList() {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null)
   const addItem = useCartStore((s) => s.addItem)
 
-  const handleSelectVariant = (variant: ProductVariant) => {
+  const handleSelectVariant = (variant: ProductVariant, product: ProductWithVariants) => {
     setSelectedVariant(variant)
     addItem({
       variant_id: variant.id,
       quantity: 1,
-      unit_price: variant.retail_price,
+      unit_price: variant.retail_price, // indicative — create_order() recomputes
       pricing_tier: "retail",
       line_total: variant.retail_price,
+      variant, // display + wholesale threshold in cart review
+      product,
     })
   }
 
@@ -80,7 +82,11 @@ export function ProductList() {
           {openProductId === product.id && (
             <div className="grid gap-2 pl-2">
               {product.variants.map((variant) => (
-                <VariantCard key={variant.id} variant={variant} onSelect={handleSelectVariant} />
+                <VariantCard
+                  key={variant.id}
+                  variant={variant}
+                  onSelect={(v) => handleSelectVariant(v, product)}
+                />
               ))}
               {product.variants.length === 0 && (
                 <p className="text-sm text-gray-500">No variants available.</p>

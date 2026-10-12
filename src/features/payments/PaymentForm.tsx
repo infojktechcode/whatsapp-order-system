@@ -3,11 +3,13 @@ import { initiateStkPush } from '../../services/payment.service.js'
 
 interface PaymentFormProps {
   orderId: string
+  /** Pre-filled M-Pesa number (from the delivery step). */
+  phone?: string | undefined
   onSuccess: () => void
 }
 
-export function PaymentForm({ orderId, onSuccess }: PaymentFormProps) {
-  const [phone, setPhone] = useState('')
+export function PaymentForm({ orderId, phone: initialPhone = '', onSuccess }: PaymentFormProps) {
+  const [phone, setPhone] = useState(initialPhone)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 

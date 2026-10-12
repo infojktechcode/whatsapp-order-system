@@ -10,6 +10,7 @@
 import { preflight, json, methodNotAllowed } from "../_shared/cors.ts"
 import { admin, safeDbMessage } from "../_shared/db.ts"
 import { ValidationError } from "../_shared/validate.ts"
+import { mintStatusToken } from "../_shared/statusToken.ts"
 import { parseCheckout } from "./parse.ts"
 
 const MAX_BODY_BYTES = 32_768
@@ -67,8 +68,20 @@ Deno.serve(async (req) => {
       return json({ error: safe ?? "Order could not be created" }, safe ? 400 : 500)
     }
 
+    // The anonymous browser has no RLS read access to its own order, so hand it
+    // a capability token to poll status through order-status (never a JWT or key).
+    const statusSecret = Deno.env.get("ORDER_STATUS_SECRET")
+    if (!statusSecret) {
+      return json({ error: "Checkout is not configured (missing ORDER_STATUS_SECRET)" }, 503)
+    }
+    const orderId = (data as { order_id?: string } | null)?.order_id
+    if (!orderId) {
+      console.error("create_order returned no order_id:", JSON.stringify(data).slice(0, 200))
+      return json({ error: "Order could not be created" }, 500)
+    }
+
     // data = { order_id, order_number, subtotal, discount, delivery_fee, total, items }
-    return json(data, 201)
+    return json({ ...data, status_token: await mintStatusToken(orderId, statusSecret) }, 201)
   } catch (e) {
     console.error("checkout unexpected error:", e instanceof Error ? e.message : e)
     return json({ error: "Order could not be created" }, 500)

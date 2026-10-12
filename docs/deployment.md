@@ -34,15 +34,15 @@ node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0
 ## Edge Functions
 
 ```bash
-supabase functions deploy checkout mpesa-stk \
+supabase functions deploy checkout mpesa-stk order-status \
   --project-ref <ref> --use-api
 
 supabase functions deploy mpesa-callback whatsapp \
   --project-ref <ref> --use-api --no-verify-jwt
 ```
 
-- `checkout` / `mpesa-stk` keep JWT verification **on** — verified live that the browser's
-  publishable key (`sb_publishable_…`) is accepted.
+- `checkout` / `mpesa-stk` / `order-status` keep JWT verification **on** — verified live that
+  the browser's publishable key (`sb_publishable_…`) is accepted.
 - `mpesa-callback` / `whatsapp` must be reachable by Safaricom/Meta without a JWT.
 
 ### Secrets
@@ -55,6 +55,7 @@ supabase secrets set KEY=value --project-ref <ref>
 |---|---|---|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | platform | auto-injected |
 | `MPESA_CALLBACK_TOKEN` | us | ✅ set — shared secret in the callback URL |
+| `ORDER_STATUS_SECRET` | us | ✅ set — HMAC key for guest status polling tokens |
 | `WHATSAPP_VERIFY_TOKEN` | us | ✅ set — Meta webhook verification token |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET` | client | required for live STK |
 | `MPESA_SHORTCODE`, `MPESA_PASSKEY` | client | required for live STK |
@@ -74,12 +75,14 @@ unless `MPESA_CALLBACK_URL` overrides it. The token is never echoed to any clien
 ## Live smoke test
 
 ```bash
-node <helper>/fnsmoke.mjs   # 18 checks against the deployed functions
+node <helper>/fnsmoke.mjs   # 28 checks against the deployed functions
 ```
 
 Covers: auth gate, server-side totals, price-field rejection, STK allowlist/status/config
 guards, callback shared-secret gate + idempotent unknown-id handling, WhatsApp verify
-handshake and signature fail-closed behaviour. Cleans up its test orders afterwards.
+handshake and signature fail-closed behaviour, and the order-status capability-token
+gates (400 missing / 403 wrong token / 403 order-token mismatch / 200 valid).
+Cleans up its test orders afterwards.
 
 ## Repository hygiene
 

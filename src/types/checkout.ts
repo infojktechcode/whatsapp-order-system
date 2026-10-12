@@ -37,6 +37,12 @@ export interface CheckoutResult {
   discount: number
   delivery_fee: number
   total: number
+  /**
+   * HMAC capability token minted server-side over the order id; the guest
+   * browser presents it to `order-status` to poll payment confirmation
+   * (RLS gives anon no read access to its own order).
+   */
+  status_token: string
   pricing: Array<{
     variant_id: string
     quantity: number
