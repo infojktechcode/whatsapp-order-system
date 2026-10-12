@@ -98,9 +98,11 @@ npm run build
 ## Current State
 
 - Frontend boots and queries Supabase with the publishable key; no secrets ship to the browser.
-- `supabase/migrations/0001_initial_schema.sql` + `seed.sql` are written but **not yet applied** to
-  the linked project — run `supabase db push` (or paste the SQL into the dashboard) before the
-  product list can return rows.
+- **Schema applied and seeded** (27 tables, 22 RLS policies, `transition_order_status()` guard).
+  Catalogue returns 7 active products / 16 variants; Trim & Fit Diet Coffee is seeded INACTIVE.
+- **RLS verified from the anon key**: catalogue reads allowed, `orders`/`customers`/`admin_users`/
+  `business_settings`/`inventory`/`audit_logs` return 0 rows, and anon writes (forged PAID order,
+  stock tampering, settings tampering) affect nothing.
 - Checkout/STK/WhatsApp webhook must be moved into `supabase/functions/*` Edge Functions
   (server-side pricing, Daraja callback validation) — see docs/payments.md.
 

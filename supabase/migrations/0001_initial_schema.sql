@@ -1,4 +1,4 @@
-﻿-- 0001_initial_schema.sql
+- 0001_initial_schema.sql
 -- WhatsApp Order System - initial database schema
 -- UUID primary keys, normalized tables, foreign keys, CHECK constraints, indexes.
 

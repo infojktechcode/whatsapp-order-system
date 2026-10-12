@@ -1,4 +1,4 @@
-﻿-- Verify RLS policies and transitions.
+- Verify RLS policies and transitions.
 -- Run with: supabase db push && psql -f verify_rls.sql
 -- Or via supabase db execute.
 
