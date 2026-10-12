@@ -1,80 +1,123 @@
-﻿import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mockSupabase, mockTable, resetMocks, mockCalls, okInsert } from '../helpers/mockSupabase.js'
+﻿// Checkout is now a single Edge Function call: the browser sends ids and
+// quantities only, and every number in CheckoutResult comes from the server.
+
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import {
+  mockSupabase,
+  resetMocks,
+  mockInvoke,
+  mockInvokeCalls,
+  mockCalls,
+} from '../helpers/mockSupabase.js'
 
 vi.mock('../../src/lib/supabase.js', async () => ({ supabase: mockSupabase }))
 
 import { checkout } from '../../src/services/checkout.service.js'
 import type { CheckoutInput } from '../../src/types/checkout.js'
 
-const VARIANT = {
-  id: 'v1',
-  retail_price: 700,
-  wholesale_price: 600,
-  wholesale_threshold: 12,
-  stock_quantity: 500,
-  active: true,
+const SERVER_RESULT = {
+  order_id: 'o1',
+  order_number: 'DB-20261012-ABC123',
+  subtotal: 16800,
+  discount: 0,
+  delivery_fee: 350,
+  total: 17150,
+  items: [
+    {
+      variant_id: 'v1',
+      quantity: 24,
+      unit_price: 700,
+      pricing_tier: 'wholesale',
+      line_total: 16800,
+    },
+  ],
 }
 
 const makeInput = (overrides: Partial<CheckoutInput> = {}): CheckoutInput => ({
   items: [{ variant_id: 'v1', quantity: 24 }],
-  customer_id: 'c1',
+  customer: { phone: '254712345678', name: 'Test Buyer' },
   customer_type: 'wholesale',
-  delivery_type: 'courier',
-  delivery_fee: 400,
-  discount: 0,
+  delivery: {
+    type: 'courier',
+    county_id: '11000000-0000-0000-0000-000000000001',
+    method_id: '22222222-2222-2222-2222-222222222202',
+  },
   ...overrides,
 })
 
-describe('checkout', () => {
+describe('checkout via the Edge Function', () => {
   beforeEach(() => {
     resetMocks()
-    mockTable('product_variants', () => ({ data: VARIANT, error: null }))
-    mockTable('pricing_tiers', () => ({ data: [], error: null }))
-    mockTable('orders', () => okInsert({ id: 'o1', order_number: 'DB-0001' }))
-    mockTable('order_items', () => okInsert())
+    mockInvoke('checkout', () => ({ data: SERVER_RESULT, error: null }))
   })
 
-  it('prices the order from the database, not from the frontend', async () => {
+  it('maps the server totals onto CheckoutResult unchanged', async () => {
     const result = await checkout(makeInput())
-    expect(result.pricing[0].unit_price).toBe(600)
+
+    expect(result.order_number).toBe('DB-20261012-ABC123')
+    expect(result.subtotal).toBe(16800)
+    expect(result.delivery_fee).toBe(350)
+    expect(result.total).toBe(17150)
     expect(result.pricing[0].pricing_tier).toBe('wholesale')
-    expect(result.subtotal).toBe(14400)
-    expect(result.total).toBe(14800)
   })
 
-  it('writes the server-calculated totals to the order row', async () => {
-    await checkout(makeInput({ discount: 800 }))
-    const insert = mockCalls('orders').find((c) => c.state.mutation === 'insert')
-    expect(insert).toBeDefined()
-    const payload = insert?.state.args.payload as Record<string, unknown>
-    expect(payload.subtotal).toBe(14400)
-    expect(payload.discount).toBe(800)
-    expect(payload.total).toBe(14000)
-  })
-
-  it('creates the order in AWAITING_PAYMENT and never as PAID', async () => {
-    const result = await checkout(makeInput())
-    const orderInsert = mockCalls('orders').find((c) => c.state.mutation === 'insert')
-    const payload = orderInsert?.state.args.payload as Record<string, unknown>
-    expect(payload.status_id).toBe('awaiting_payment')
-    expect(result.order_id).toBe('o1')
-    expect(result.order_number).toBe('DB-0001')
-  })
-
-  it('writes one order item per cart line, priced server-side', async () => {
+  it('posts only business input — never prices, fees, discounts or totals', async () => {
     await checkout(makeInput())
-    const itemInsert = mockCalls('order_items').find((c) => c.state.mutation === 'insert')
-    const items = itemInsert?.state.args.payload as Array<Record<string, unknown>>
-    expect(items).toHaveLength(1)
-    expect(items[0].order_id).toBe('o1')
-    expect(items[0].unit_price).toBe(600)
-    expect(items[0].line_total).toBe(14400)
+
+    const calls = mockInvokeCalls('checkout')
+    expect(calls).toHaveLength(1)
+
+    const body = JSON.stringify(calls[0].body)
+    for (const forbidden of [
+      'delivery_fee',
+      'discount',
+      'subtotal',
+      '"total"',
+      'unit_price',
+      'line_total',
+      'pricing_tier',
+      'customer_id',
+    ]) {
+      expect(body).not.toContain(forbidden)
+    }
+
+    const sent = calls[0].body as Partial<CheckoutInput>
+    expect(sent.items).toEqual([{ variant_id: 'v1', quantity: 24 }])
+    expect(sent.customer?.phone).toBe('254712345678')
   })
 
-  it('touches no payment tables during checkout', async () => {
+  it('never writes to orders/order_items from the browser', async () => {
     await checkout(makeInput())
-    const tables = mockCalls().map((c) => c.table)
-    expect(tables).not.toContain('payments')
-    expect(tables).not.toContain('payment_transactions')
+    expect(mockCalls()).toHaveLength(0)
+  })
+
+  it('surfaces the server-side validation error verbatim', async () => {
+    mockInvoke('checkout', () => ({
+      data: null,
+      error: {
+        message: 'FunctionsHttpError',
+        context: {
+          json: async () => ({
+            error: 'Insufficient stock for SKU FFM-SV-236 (available 50)',
+          }),
+        },
+      },
+    }))
+
+    await expect(checkout(makeInput())).rejects.toThrow(/Insufficient stock/)
+  })
+
+  it('fails loudly when the function is unreachable', async () => {
+    mockInvoke('checkout', () => {
+      throw new TypeError('fetch failed')
+    })
+
+    await expect(checkout(makeInput())).rejects.toThrow()
+  })
+
+  it('rejects a malformed success payload instead of rendering NaN totals', async () => {
+    mockInvoke('checkout', () => ({ data: { order_id: 'o1' }, error: null }))
+
+    await expect(checkout(makeInput())).rejects.toThrow(/unexpected response/)
   })
 })

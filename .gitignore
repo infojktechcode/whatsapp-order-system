@@ -19,6 +19,9 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 
+# Supabase CLI local state (link refs, machine id)
+supabase/.temp/
+
 # Test / tooling
 coverage/
 playwright-report/

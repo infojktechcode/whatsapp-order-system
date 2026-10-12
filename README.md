@@ -59,6 +59,13 @@ whatsapp-order-system/
 ├── docs/                    # Architecture, DB, security, payments, WhatsApp, deployment
 ├── supabase/
 │   ├── migrations/0001_initial_schema.sql   # 27 tables, 36 indexes, RLS policies, status guard
+│   ├── migrations/0002_backend_functions.sql # create_order(), mpesa_handle_result(), grants
+│   ├── functions/           # Edge Functions (Deno): checkout, mpesa-stk, mpesa-callback, whatsapp
+│   │   ├── _shared/         # cors, validation, service-role db client, Daraja client
+│   │   ├── checkout/        # strict request parser + create_order() caller
+│   │   ├── mpesa-stk/       # server-computed amount, payment + audit rows
+│   │   ├── mpesa-callback/  # shared-secret, amount check, idempotent settlement
+│   │   └── whatsapp/        # Cloud API webhook + pure conversation state machine
 │   ├── seed.sql             # Dear Body demo catalogue (DEMO PRICE tags)
 │   └── verify_rls.sql       # RLS verification script
 ├── src/
@@ -67,14 +74,15 @@ whatsapp-order-system/
 │   ├── index.css            # Tailwind entry
 │   ├── types/               # Shared types (ProductVariant, Order, Payment, etc.)
 │   ├── lib/supabase.ts      # Browser Supabase client (publishable key ONLY)
-│   ├── services/            # Pricing, checkout, product, catalog, delivery, payment
+│   ├── lib/functions.ts     # invokeFunction() — Edge Function calls with server-error surfacing
+│   ├── services/            # Checkout/STK via Edge Functions; product, catalog, delivery, pricing
 │   ├── hooks/               # useProducts
 │   └── features/            # Products, cart, checkout, payments, delivery, admin, WhatsApp
 ├── tests/
-│   ├── helpers/mockSupabase.ts   # Offline chainable Supabase stub
-│   ├── unit/                # pricing, whatsapp state machine
-│   ├── integration/         # checkout
-│   └── security/            # payment/STK behaviour
+│   ├── helpers/mockSupabase.ts   # Offline chainable Supabase stub + functions.invoke mock
+│   ├── unit/                # pricing, WhatsApp state machine (supabase/functions/whatsapp/state.ts)
+│   ├── integration/         # checkout via the Edge Function
+│   └── security/            # STK behaviour, checkout request validation (price-field rejection)
 └── public/products/         # Product images
 ```
 
@@ -103,8 +111,22 @@ npm run build
 - **RLS verified from the anon key**: catalogue reads allowed, `orders`/`customers`/`admin_users`/
   `business_settings`/`inventory`/`audit_logs` return 0 rows, and anon writes (forged PAID order,
   stock tampering, settings tampering) affect nothing.
-- Checkout/STK/WhatsApp webhook must be moved into `supabase/functions/*` Edge Functions
-  (server-side pricing, Daraja callback validation) — see docs/payments.md.
+- **Backend SQL applied**: `create_order()` (server-side pricing/fees/stock in one transaction) and
+  `mpesa_handle_result()` (amount check, attempt-level idempotency, only path to PAID), both
+  EXECUTE-revoked from `anon`/`authenticated`/`PUBLIC`.
+- **Four Edge Functions deployed and live-tested** (18/18 checks):
+  `POST /functions/v1/checkout` — 201 with server totals, 400 on any client-sent
+  `delivery_fee`/`discount`/`total`/`amount`/`customer_id`, 401 without a key.
+  `POST /functions/v1/mpesa-stk` — 400 on client `amount`, 404 unknown order, 503 until
+  Daraja secrets are set (fail-closed).
+  `POST /functions/v1/mpesa-callback` — 401 without/wrong `?token=`, 200 ignored for unknown
+  `checkout_request_id` (idempotency), deployed `--no-verify-jwt`.
+  `GET/POST /functions/v1/whatsapp` — verify handshake echoes the challenge only for the right
+  `WHATSAPP_VERIFY_TOKEN`; POST is 503 (fail-closed) until `WHATSAPP_APP_SECRET` is set,
+  deployed `--no-verify-jwt`.
+- Remaining secrets to provide (Edge Function secrets, never the frontend): `MPESA_CONSUMER_KEY`,
+  `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY` and, for chat,
+  `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET` — see docs/deployment.md.
 
 ## Key Guarantees
 

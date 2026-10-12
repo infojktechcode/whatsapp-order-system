@@ -69,13 +69,57 @@ function createChain(table: string) {
   return chain
 }
 
+// --- functions.invoke support -------------------------------------------------
+// Services call supabase.functions.invoke(name, { body }) to reach the Edge
+// Functions. Tests register a handler per function name; every call is recorded
+// so tests can assert exactly what the browser sends (e.g. "no price fields").
+
+export interface InvokeCall {
+  name: string
+  body: unknown
+}
+
+export interface InvokeResult {
+  data: unknown
+  error: { message: string; context?: unknown } | null
+}
+
+export type InvokeHandler = (body: unknown) => InvokeResult | Promise<InvokeResult>
+
+const invokeHandlers: Record<string, InvokeHandler> = {}
+const invokeCalls: InvokeCall[] = []
+
 export const mockSupabase = {
   from: (table: string) => createChain(table),
+  functions: {
+    invoke: (name: string, options?: { body?: unknown }): Promise<InvokeResult> => {
+      invokeCalls.push({ name, body: options?.body ?? null })
+      const handler = invokeHandlers[name]
+      if (!handler) {
+        return Promise.resolve({
+          data: null,
+          error: { message: `No invoke handler registered for function "${name}"` },
+        })
+      }
+      // Handler errors become rejections, mirroring a network failure.
+      return Promise.resolve().then(() => handler(options?.body ?? null))
+    },
+  },
 }
 
 /** Register (or replace) the handler for a table. */
 export function mockTable(table: string, handler: TableHandler): void {
   handlers[table] = handler
+}
+
+/** Register (or replace) the handler for an Edge Function. */
+export function mockInvoke(name: string, handler: InvokeHandler): void {
+  invokeHandlers[name] = handler
+}
+
+/** Every `functions.invoke(...)` call since the last reset (optionally by name). */
+export function mockInvokeCalls(name?: string): InvokeCall[] {
+  return name ? invokeCalls.filter((c) => c.name === name) : invokeCalls
 }
 
 /** Every `supabase.from(...)` call made since the last reset. */
@@ -85,7 +129,9 @@ export function mockCalls(table?: string): Array<{ table: string; state: QuerySt
 
 export function resetMocks(): void {
   for (const key of Object.keys(handlers)) delete handlers[key]
+  for (const key of Object.keys(invokeHandlers)) delete invokeHandlers[key]
   calls.length = 0
+  invokeCalls.length = 0
 }
 
 /** Convenience for the very common "one row" case. */
