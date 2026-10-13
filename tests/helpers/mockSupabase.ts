@@ -89,8 +89,36 @@ export type InvokeHandler = (body: unknown) => InvokeResult | Promise<InvokeResu
 const invokeHandlers: Record<string, InvokeHandler> = {}
 const invokeCalls: InvokeCall[] = []
 
+// --- auth support -------------------------------------------------------------
+// Admin sign-in goes through supabase.auth; tests can stub the result and
+// inspect what credentials were sent.
+
+export interface AuthCall {
+  fn: string
+  args: unknown
+}
+
+export type AuthHandler = (args: unknown) => { data: unknown; error: { message: string } | null }
+
+const authHandlers: Record<string, AuthHandler> = {}
+const authCalls: AuthCall[] = []
+
 export const mockSupabase = {
   from: (table: string) => createChain(table),
+  auth: {
+    signInWithPassword: (args: unknown): Promise<{ data: unknown; error: { message: string } | null }> => {
+      authCalls.push({ fn: 'signInWithPassword', args })
+      const handler = authHandlers.signInWithPassword
+      return Promise.resolve(
+        handler ? handler(args) : { data: null, error: { message: 'No auth mock registered' } }
+      )
+    },
+    signOut: (): Promise<{ error: { message: string } | null }> => {
+      authCalls.push({ fn: 'signOut', args: null })
+      const handler = authHandlers.signOut
+      return Promise.resolve(handler ? handler(null) : { data: null, error: null })
+    },
+  },
   functions: {
     invoke: (name: string, options?: { body?: unknown }): Promise<InvokeResult> => {
       invokeCalls.push({ name, body: options?.body ?? null })
@@ -105,6 +133,16 @@ export const mockSupabase = {
       return Promise.resolve().then(() => handler(options?.body ?? null))
     },
   },
+}
+
+/** Register (or replace) the handler for an auth method. */
+export function mockAuth(fn: 'signInWithPassword' | 'signOut', handler: AuthHandler): void {
+  authHandlers[fn] = handler
+}
+
+/** Every auth call made since the last reset. */
+export function mockAuthCalls(): AuthCall[] {
+  return authCalls
 }
 
 /** Register (or replace) the handler for a table. */
@@ -130,8 +168,10 @@ export function mockCalls(table?: string): Array<{ table: string; state: QuerySt
 export function resetMocks(): void {
   for (const key of Object.keys(handlers)) delete handlers[key]
   for (const key of Object.keys(invokeHandlers)) delete invokeHandlers[key]
+  for (const key of Object.keys(authHandlers)) delete authHandlers[key]
   calls.length = 0
   invokeCalls.length = 0
+  authCalls.length = 0
 }
 
 /** Convenience for the very common "one row" case. */

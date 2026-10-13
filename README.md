@@ -18,9 +18,9 @@ Production-ready, mobile-first WhatsApp-style product ordering system for a Keny
 | 10–11. M-Pesa Daraja (callback-gated, idempotent) | Implemented |
 | 12. WhatsApp architecture (reuses backend services) | Implemented |
 | 13. Conversation state (8-step machine) | Implemented |
-| 14. Admin dashboard resources | Defined |
+| 14. Admin dashboard resources | Implemented (orders, status transitions, stats, audit) |
 | 15. RLS (23 policies, no `USING (true)` on sensitive tables) | Implemented |
-| 16. Auth (guest/registered/wholesale/admin/super_admin) | Defined |
+| 16. Auth (guest/registered/wholesale/admin/super_admin) | Implemented (staff sign-in; guest checkout is account-free) |
 | 17–18. Demo data (DEMO PRICE tags) | Implemented |
 | 19. Trim & Fit inactive — no health claims | Implemented |
 | 20. Image storage (Supabase Storage, WebP/AVIF, lazy loading) | Defined |
@@ -60,12 +60,15 @@ whatsapp-order-system/
 ├── supabase/
 │   ├── migrations/0001_initial_schema.sql   # 27 tables, 36 indexes, RLS policies, status guard
 │   ├── migrations/0002_backend_functions.sql # create_order(), mpesa_handle_result(), grants
-│   ├── functions/           # Edge Functions (Deno): checkout, mpesa-stk, mpesa-callback, order-status, whatsapp
+│   ├── migrations/0003_admin_orders_readonly.sql # admins may SELECT orders, never write them
+│   ├── migrations/0004_seed_transition_matrix.sql  # re-seeds order_status_transitions (see docs/payments.md)
+│   ├── functions/           # Edge Functions (Deno): checkout, mpesa-stk, mpesa-callback, order-status, admin, whatsapp
 │   │   ├── _shared/         # cors, validation, service-role db client, Daraja client, status token (HMAC)
 │   │   ├── checkout/        # strict request parser + create_order() caller, mints status_token
 │   │   ├── mpesa-stk/       # server-computed amount, payment + audit rows
 │   │   ├── mpesa-callback/  # shared-secret, amount check, idempotent settlement
 │   │   ├── order-status/    # read-only guest status polling, HMAC capability token
+│   │   ├── admin/           # staff-only orders, transitions (guarded), stats, audit
 │   │   └── whatsapp/        # Cloud API webhook + pure conversation state machine
 │   ├── seed.sql             # Dear Body demo catalogue (DEMO PRICE tags)
 │   └── verify_rls.sql       # RLS verification script
@@ -78,12 +81,12 @@ whatsapp-order-system/
 │   ├── lib/functions.ts     # invokeFunction() — Edge Function calls with server-error surfacing
 │   ├── services/            # Checkout/STK/status via Edge Functions; product, catalog, delivery, pricing
 │   ├── hooks/               # useProducts
-│   └── features/            # Products, cart, checkout (review → pay → confirm wizard), payments, delivery, admin, WhatsApp
+│   └── features/            # Products, cart, checkout (review → pay → confirm wizard), payments, delivery, admin (login/list/detail), WhatsApp
 ├── tests/
-│   ├── helpers/mockSupabase.ts   # Offline chainable Supabase stub + functions.invoke mock
+│   ├── helpers/mockSupabase.ts   # Offline chainable Supabase stub + functions.invoke and auth mocks
 │   ├── unit/                # pricing, WhatsApp state machine (supabase/functions/whatsapp/state.ts)
-│   ├── integration/         # checkout + order-status via Edge Functions
-│   └── security/            # STK behaviour, checkout request validation, status token HMAC
+│   ├── integration/         # checkout + order-status + admin via Edge Functions
+│   └── security/            # STK behaviour, checkout/admin request validation, status token HMAC, admin roles
 └── public/products/         # Product images
 ```
 
@@ -115,18 +118,30 @@ npm run build
 - **Backend SQL applied**: `create_order()` (server-side pricing/fees/stock in one transaction) and
   `mpesa_handle_result()` (amount check, attempt-level idempotency, only path to PAID), both
   EXECUTE-revoked from `anon`/`authenticated`/`PUBLIC`.
-- **Five Edge Functions deployed and live-tested** (28/28 checks):
+- **Six Edge Functions deployed and live-tested** (42/42 checks):
   `POST /functions/v1/checkout` — 201 with server totals + a `status_token`, 400 on any
   client-sent `delivery_fee`/`discount`/`total`/`amount`/`customer_id`, 401 without a key.
   `POST /functions/v1/mpesa-stk` — 400 on client `amount`, 404 unknown order, 503 until
   Daraja secrets are set (fail-closed).
   `POST /functions/v1/order-status` — 200 with a valid HMAC capability token, 400 when the
   token is missing, 403 on wrong/mismatched tokens (checked before any lookup), read-only.
+  `POST /functions/v1/admin` — 401 without a user JWT, 403 for a signed-in user with no
+  `admin_users` row, 200 for an active admin; `paid` is refused (callback-only) and an
+  illegal transition returns 400. Transitions run through `transition_order_status()`
+  and are written to `audit_logs`.
   `POST /functions/v1/mpesa-callback` — 401 without/wrong `?token=`, 200 ignored for unknown
   `checkout_request_id` (idempotency), deployed `--no-verify-jwt`.
   `GET/POST /functions/v1/whatsapp` — verify handshake echoes the challenge only for the right
   `WHATSAPP_VERIFY_TOKEN`; POST is 503 (fail-closed) until `WHATSAPP_APP_SECRET` is set,
   deployed `--no-verify-jwt`.
+- **Admin dashboard is functional** (`/admin`): staff sign in with Supabase Auth, orders
+  are listed with filters, each order opens a detail view with items, payment, status
+  history and only the transitions the server allows. Orders are read-only to every
+  client role (`0003`), so no admin session can rewrite totals or skip the matrix.
+- **Fixed: the status transition matrix was never seeded.** `0001` inserted
+  `order_status_transitions` before `order_statuses` had rows, so the matrix was empty
+  and every `transition_order_status()` call failed — including the
+  `payment_processing → paid` move that M-Pesa settlement depends on. `0004` re-seeds it.
 - **Checkout flow wired end-to-end in the UI**: delivery details → review → `checkout()` →
   `PaymentForm` (STK) → confirmation polling via `order-status` → paid/failed/waiting states.
   The browser never sends prices; status is read through the capability token (RLS keeps

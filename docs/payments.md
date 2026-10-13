@@ -41,6 +41,10 @@ getOrderStatus       POST /order-status
 ## Important Rules
 
 - STK success = `PAYMENT_PROCESSING`, **not** PAID. Only a validated callback may mark PAID.
+- `mpesa_handle_result()` reaches PAID through `transition_order_status()`, so the
+  transition matrix must be populated: `order_status_transitions` is seeded by
+  `0004_seed_transition_matrix.sql` (0001 inserted it before `order_statuses` was
+  seeded, which left the matrix empty and every transition failing).
 - The browser never sends an amount, fee, discount or total — `checkout` and `mpesa-stk`
   reject those fields with 400 (`_shared/validate.ts` → `FORBIDDEN_PRICE_FIELDS`).
 - The browser never writes `payments`, `payment_transactions` or order status
