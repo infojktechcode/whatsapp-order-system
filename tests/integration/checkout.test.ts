@@ -116,6 +116,24 @@ describe('checkout via the Edge Function', () => {
     await expect(checkout(makeInput())).rejects.toThrow(/Insufficient stock/)
   })
 
+  it('surfaces the rate-limit message so the customer sees why', async () => {
+    mockInvoke('checkout', () => ({
+      data: null,
+      error: {
+        message: 'FunctionsHttpError',
+        status: 429,
+        context: {
+          json: async () => ({
+            error: 'Too many checkout attempts from this number. Please try again later or call the shop.',
+            retry_after_minutes: 42,
+          }),
+        },
+      },
+    }))
+
+    await expect(checkout(makeInput())).rejects.toThrow(/Too many checkout attempts/)
+  })
+
   it('fails loudly when the function is unreachable', async () => {
     mockInvoke('checkout', () => {
       throw new TypeError('fetch failed')

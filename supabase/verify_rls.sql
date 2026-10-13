@@ -38,3 +38,15 @@ SELECT sr.order_id, sr.variant_id, sr.quantity, sr.state
 FROM stock_reservations sr
 LEFT JOIN orders o ON o.id = sr.order_id
 WHERE sr.state = 'reserved' AND o.id IS NULL;
+
+-- 6. INVARIANT: inventory.reserved_quantity must equal the sum of 'reserved'
+--    ledger rows. Any row here is drift (e.g. a cleanup script that removed
+--    ledger rows before deleting the order, bypassing the release trigger)
+--    and means stock is silently locked out of sale.
+SELECT i.variant_id,
+       i.reserved_quantity AS inventory_says,
+       COALESCE(SUM(sr.quantity) FILTER (WHERE sr.state = 'reserved'), 0)::INTEGER AS ledger_says
+FROM inventory i
+LEFT JOIN stock_reservations sr ON sr.variant_id = i.variant_id
+GROUP BY i.variant_id, i.reserved_quantity
+HAVING i.reserved_quantity <> COALESCE(SUM(sr.quantity) FILTER (WHERE sr.state = 'reserved'), 0)::INTEGER;

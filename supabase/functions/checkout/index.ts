@@ -7,7 +7,7 @@
 // create_order() (Postgres, one transaction). The browser's payload is
 // validated by parseCheckout(), which rejects any price-like field.
 
-import { preflight, json, methodNotAllowed } from "../_shared/cors.ts"
+import { preflight, json, methodNotAllowed, clientIp } from "../_shared/cors.ts"
 import { admin, safeDbMessage } from "../_shared/db.ts"
 import { ValidationError } from "../_shared/validate.ts"
 import { mintStatusToken } from "../_shared/statusToken.ts"
@@ -42,6 +42,38 @@ Deno.serve(async (req) => {
     throw e
   }
 
+  // Rate limit before any write. Checkout is reachable by anyone holding the
+  // publishable key (it ships in the browser bundle), so an unauthenticated
+  // caller could otherwise create unlimited orders. The counter lives in
+  // Postgres because Edge Function instances share no memory.
+  try {
+    const { data: limit, error: limitError } = await admin().rpc("check_checkout_rate_limit", {
+      p_phone: input.customer.phone,
+      p_ip: clientIp(req),
+    })
+
+    if (limitError) {
+      // Fail open on infrastructure trouble: a broken counter must not stop
+      // customers from ordering. Platform-level rate limits still apply.
+      console.error("rate limit check failed:", limitError.message)
+    } else if (limit && (limit as { allowed?: boolean }).allowed === false) {
+      const info = limit as { scope?: string; retry_after_minutes?: number }
+      const minutes = Math.max(1, info.retry_after_minutes ?? 60)
+      console.warn(`checkout rate limited (${info.scope})`)
+      return json(
+        {
+          error:
+            "Too many checkout attempts from this number. Please try again later or call the shop.",
+          retry_after_minutes: minutes,
+        },
+        429,
+        { "Retry-After": String(minutes * 60) }
+      )
+    }
+  } catch (e) {
+    console.error("rate limit check threw:", e instanceof Error ? e.message : e)
+  }
+
   try {
     const { data, error } = await admin().rpc("create_order", {
       p_items: input.items,
@@ -66,6 +98,18 @@ Deno.serve(async (req) => {
       console.error("create_order failed:", error.message)
       const safe = safeDbMessage(error.message)
       return json({ error: safe ?? "Order could not be created" }, safe ? 400 : 500)
+    }
+
+    // The order exists, so this attempt counts against the limit. Recording it
+    // here (not before) means a customer who mistypes their delivery details is
+    // never locked out for something that created no order.
+    try {
+      await admin().rpc("record_checkout_attempt", {
+        p_phone: input.customer.phone,
+        p_ip: clientIp(req),
+      })
+    } catch (e) {
+      console.warn("could not record checkout attempt:", e instanceof Error ? e.message : e)
     }
 
     // Opportunistic expiry sweep: orders that were created but never paid would

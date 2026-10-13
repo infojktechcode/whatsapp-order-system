@@ -63,6 +63,7 @@ whatsapp-order-system/
 │   ├── migrations/0003_admin_orders_readonly.sql # admins may SELECT orders, never write them
 │   ├── migrations/0004_seed_transition_matrix.sql  # re-seeds order_status_transitions (see docs/payments.md)
 │   ├── migrations/0005_stock_reservations.sql      # stock reserve/consume/release ledger (stops overselling)
+│   ├── migrations/0006_checkout_rate_limit.sql     # rate limits for the public checkout endpoint
 │   ├── functions/           # Edge Functions (Deno): checkout, mpesa-stk, mpesa-callback, order-status, admin, whatsapp
 │   │   ├── _shared/         # cors, validation, service-role db client, Daraja client, status token (HMAC)
 │   │   ├── checkout/        # strict request parser + create_order() caller, mints status_token
@@ -148,6 +149,12 @@ npm run build
   deleting an order releases it. Abandoned orders are swept by
   `release_expired_orders()`. Verified live: ordering all 50 units makes the next
   order fail with "Insufficient stock", and cancelling puts them back on sale.
+- **Checkout is rate limited.** Anyone with the publishable key can reach
+  `/functions/v1/checkout`, so `0006` caps orders at 5 per phone per hour and 20
+  per IP per hour (both tunable in `business_settings`, no redeploy). The counter
+  lives in Postgres because Edge Function instances share no memory; only orders
+  that were actually created consume quota, so a typo never locks anyone out, and
+  a failure in the limiter fails open rather than blocking customers.
 - **Fixed: the status transition matrix was never seeded.** `0001` inserted
   `order_status_transitions` before `order_statuses` had rows, so the matrix was empty
   and every `transition_order_status()` call failed — including the

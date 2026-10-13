@@ -21,6 +21,14 @@
 - NEVER use USING (true) on sensitive tables.
 - Service-level access via backend/service role, not weakened RLS.
 
+## Abuse resistance
+- `/functions/v1/checkout` is public (the publishable key ships in the browser),
+  so it is rate limited in Postgres — see docs/deployment.md for the knobs.
+- Attempts that create no order consume no quota, so honest mistakes are never
+  punished, and the limiter fails open if the counter itself errors.
+- Stock is reserved per order (`stock_reservations`), so repeated checkout calls
+  cannot oversell a variant even though checkout is unauthenticated.
+
 ## Admin access
 - Staff sign in with Supabase Auth (email + password). The browser never handles a
   token itself: `functions.invoke` attaches the session JWT automatically.
