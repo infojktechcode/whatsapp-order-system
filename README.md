@@ -62,6 +62,7 @@ whatsapp-order-system/
 │   ├── migrations/0002_backend_functions.sql # create_order(), mpesa_handle_result(), grants
 │   ├── migrations/0003_admin_orders_readonly.sql # admins may SELECT orders, never write them
 │   ├── migrations/0004_seed_transition_matrix.sql  # re-seeds order_status_transitions (see docs/payments.md)
+│   ├── migrations/0005_stock_reservations.sql      # stock reserve/consume/release ledger (stops overselling)
 │   ├── functions/           # Edge Functions (Deno): checkout, mpesa-stk, mpesa-callback, order-status, admin, whatsapp
 │   │   ├── _shared/         # cors, validation, service-role db client, Daraja client, status token (HMAC)
 │   │   ├── checkout/        # strict request parser + create_order() caller, mints status_token
@@ -138,6 +139,15 @@ npm run build
   are listed with filters, each order opens a detail view with items, payment, status
   history and only the transitions the server allows. Orders are read-only to every
   client role (`0003`), so no admin session can rewrite totals or skip the matrix.
+- **Stock is reserved, not just checked.** `create_order()` used to read
+  `quantity_on_hand - reserved_quantity` but never wrote it, so unlimited orders
+  could pass the stock check for the same units. `0005` adds a `stock_reservations`
+  ledger: an `AFTER INSERT` trigger on `order_items` reserves stock inside the
+  order's own transaction (locking the inventory row, so concurrent checkouts for
+  the last units serialise), `transition_order_status()` releases/consumes it, and
+  deleting an order releases it. Abandoned orders are swept by
+  `release_expired_orders()`. Verified live: ordering all 50 units makes the next
+  order fail with "Insufficient stock", and cancelling puts them back on sale.
 - **Fixed: the status transition matrix was never seeded.** `0001` inserted
   `order_status_transitions` before `order_statuses` had rows, so the matrix was empty
   and every `transition_order_status()` call failed — including the

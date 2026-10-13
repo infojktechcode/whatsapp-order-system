@@ -68,6 +68,18 @@ Deno.serve(async (req) => {
       return json({ error: safe ?? "Order could not be created" }, safe ? 400 : 500)
     }
 
+    // Opportunistic expiry sweep: orders that were created but never paid would
+    // otherwise hold their stock reservation forever. Best effort — a failure
+    // here must never fail the customer's order.
+    try {
+      const swept = await admin().rpc("release_expired_orders", { p_limit: 25 })
+      if (swept.error) console.warn("expiry sweep skipped:", swept.error.message)
+      else if ((swept.data as number) > 0)
+        console.log(`expiry sweep released ${swept.data} abandoned order(s)`)
+    } catch (e) {
+      console.warn("expiry sweep threw:", e instanceof Error ? e.message : e)
+    }
+
     // The anonymous browser has no RLS read access to its own order, so hand it
     // a capability token to poll status through order-status (never a JWT or key).
     const statusSecret = Deno.env.get("ORDER_STATUS_SECRET")

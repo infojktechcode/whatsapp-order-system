@@ -27,6 +27,7 @@ node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0
 node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0002_backend_functions.sql
 node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0003_admin_orders_readonly.sql
 node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0004_seed_transition_matrix.sql
+node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0005_stock_reservations.sql
 ```
 
 - `0001` — 27 tables, indexes, RLS policies, `transition_order_status()`.
@@ -34,6 +35,8 @@ node <helper>/run-sql.cjs <project-ref> <management-token> supabase/migrations/0
   EXECUTE grants that stop `anon`/`authenticated` from calling privileged functions.
 - `0003` — admins get SELECT on orders only; no client role can write orders.
 - `0004` — re-seeds `order_status_transitions` (run after the seed data, see payments.md).
+- `0005` — `stock_reservations` ledger + reserve/consume/release triggers and the
+  expiry sweep. Idempotent; safe to re-run.
 - `supabase/seed.sql` must run **after** the migrations.
 
 ## Edge Functions

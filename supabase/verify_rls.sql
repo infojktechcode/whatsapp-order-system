@@ -21,3 +21,20 @@ FROM order_status_transitions ost
 JOIN order_statuses f ON f.id = ost.from_status_id
 JOIN order_statuses t ON t.id = ost.to_status_id
 WHERE f.slug = 'draft' AND t.slug IN ('paid', 'confirmed', 'processing', 'ready_for_dispatch', 'dispatched', 'delivered');
+
+-- 4. Stock reservations exist and the ledger table has RLS on
+--    (migration 0005: without it the catalogue can be oversold)
+SELECT
+  (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_reserve_stock')             AS reserve_trigger,
+  (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_release_stock_on_delete')  AS delete_trigger,
+  (SELECT count(*) FROM order_status_transitions)                                  AS transition_matrix_rows,
+  (SELECT count(*) FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'stock_reservations')           AS ledger_exists,
+  (SELECT relrowsecurity FROM pg_class WHERE relname = 'stock_reservations')       AS ledger_rls;
+
+-- 5. Reservations must never outlive the stock they hold: anything still
+--    'reserved' whose order was deleted or delivered is a leak worth chasing.
+SELECT sr.order_id, sr.variant_id, sr.quantity, sr.state
+FROM stock_reservations sr
+LEFT JOIN orders o ON o.id = sr.order_id
+WHERE sr.state = 'reserved' AND o.id IS NULL;
